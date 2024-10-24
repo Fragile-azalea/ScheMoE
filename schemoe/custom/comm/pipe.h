@@ -3,6 +3,11 @@
 
 #include "abstract.h"
 
+#undef CHECK_EQ
+
+#define CHECK_EQ(x, y) AT_ASSERTM((x) == (y), "CHECK_EQ fails.")
+
+
 class PipeComm : public AbstractComm {
 public:
     // Declare all public members here
