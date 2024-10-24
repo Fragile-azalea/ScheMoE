@@ -10,6 +10,16 @@ torch==1.9.1
 ## How to install
 
 ```Shell
+# Install zfp
+git clone https://github.com/LLNL/zfp.git
+cd zfp
+mkdir build
+cd build
+cmake -DZFP_WITH_CUDA=ON ..
+cmake --build . --config Release
+ctest
+cd ..
+
 git clone https://github.com/Fragile-azalea/ScheMoE.git
 cd ScheMoE
 pip install -e .
