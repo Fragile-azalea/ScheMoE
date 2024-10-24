@@ -11,14 +11,14 @@ torch==1.9.1
 
 ```Shell
 # Install zfp
-git clone https://github.com/LLNL/zfp.git
+git clone https://github.com/Fragile-azalea/zfp.git
 cd zfp
 mkdir build
 cd build
-cmake -DZFP_WITH_CUDA=ON ..
+cmake ..
 cmake --build . --config Release
 ctest
-cd ..
+cd ../..
 
 git clone https://github.com/Fragile-azalea/ScheMoE.git
 cd ScheMoE
