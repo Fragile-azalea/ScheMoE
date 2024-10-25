@@ -1,5 +1,5 @@
 diff --git a/.gitignore b/.gitignore
-index 900ab517d..387aace22 100644
+index 900ab517..387aace2 100644
 --- a/.gitignore
 +++ b/.gitignore
 @@ -7,4 +7,5 @@ build
@@ -11,7 +11,7 @@ index 900ab517d..387aace22 100644
 +local/
 +prof_out/
 diff --git a/megatron/legacy/model/transformer.py b/megatron/legacy/model/transformer.py
-index db46a720b..35d401806 100644
+index db46a720..35d40180 100644
 --- a/megatron/legacy/model/transformer.py
 +++ b/megatron/legacy/model/transformer.py
 @@ -1238,7 +1238,10 @@ class ParallelTransformerLayer(MegatronModule):
@@ -27,25 +27,23 @@ index db46a720b..35d401806 100644
          # Second residual connection.
          if self.apply_residual_connection_post_norm:
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 89ed8c198..488f85aa4 100644
+index 89ed8c19..c47a8184 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1194,7 +1194,11 @@ def _add_training_args(parser):
+@@ -1194,6 +1194,10 @@ def _add_training_args(parser):
      group.add_argument('--disable-tp-comm-split-rs', action='store_false',
                         help='Disables the Reduce-Scatter overlap with fprop GEMM.',
                         dest='tp_comm_split_rs')
--
 +    group.add_argument('--schemoe', action='store_true',
-+                       help='Use ScheMoE')
++                       help='Use ScheMoE.')
 +    group.add_argument('--tutel', action='store_true',
-+                       help='Use Tutel')
-+    
-     return parser
++                       help='Use Tutel.')
  
+     return parser
  
 diff --git a/megatron/training/schemoe_moe_decorator.py b/megatron/training/schemoe_moe_decorator.py
 new file mode 100644
-index 000000000..77652558e
+index 00000000..5aaf043a
 --- /dev/null
 +++ b/megatron/training/schemoe_moe_decorator.py
 @@ -0,0 +1,38 @@
@@ -65,7 +63,7 @@ index 000000000..77652558e
 +        },
 +        model_dim=hidden_size,
 +        experts={
-+            'count_per_node': 2,'type': 'ffn', 
++            'count_per_node': 2,'type': 'ffn',
 +            'hidden_size_per_expert': ffn_hidden_size,
 +            'activation_fn' : lambda x: activation(x)
 +        },
@@ -78,17 +76,17 @@ index 000000000..77652558e
 +    args = get_args()
 +    def schemoe_model(pre_process=True, post_process=True):
 +        model = model_provider()
-+       
++
 +        for idx, l in enumerate(model.language_model.encoder.layers):
 +            l.mlp = schmoe_moe(args, idx)
-+        
++
 +        print_rank_0(f'ScheMoE model:\n{model}')
 +        return model
 +
 +    return schemoe_model
 +
 diff --git a/megatron/training/training.py b/megatron/training/training.py
-index bc156e4ce..629a9329f 100644
+index bc156e4c..720cc7a8 100644
 --- a/megatron/training/training.py
 +++ b/megatron/training/training.py
 @@ -228,6 +228,18 @@ def pretrain(train_valid_test_dataset_provider,
@@ -100,7 +98,7 @@ index bc156e4ce..629a9329f 100644
 +        from .schemoe_moe_decorator import schemoe_model_provider
 +        print_rank_0(f"Use ScheMoE Model")
 +        model_provider = schemoe_model_provider(model_provider)
-+    
++
 +    # Use Tutel
 +    if args.tutel:
 +        from .tutel_moe_decorator import tutel_model_provider
@@ -112,7 +110,7 @@ index bc156e4ce..629a9329f 100644
      app_metrics['app_build_optimizer_start_time'] = one_logger_utils.get_timestamp_in_ms()
 diff --git a/megatron/training/tutel_moe_decorator.py b/megatron/training/tutel_moe_decorator.py
 new file mode 100644
-index 000000000..fff8fd525
+index 00000000..d4108ad6
 --- /dev/null
 +++ b/megatron/training/tutel_moe_decorator.py
 @@ -0,0 +1,38 @@
@@ -132,7 +130,7 @@ index 000000000..fff8fd525
 +        },
 +        model_dim=hidden_size,
 +        experts={
-+            'count_per_node': 2,'type': 'ffn', 
++            'count_per_node': 2,'type': 'ffn',
 +            'hidden_size_per_expert': ffn_hidden_size,
 +            'activation_fn' : lambda x: activation(x)
 +        },
@@ -145,17 +143,17 @@ index 000000000..fff8fd525
 +    args = get_args()
 +    def tutel_model(pre_process=True, post_process=True):
 +        model = model_provider()
-+       
++
 +        for idx, l in enumerate(model.language_model.encoder.layers):
 +            l.mlp = tutel_moe(args, idx)
-+        
++
 +        print_rank_0(f'Tutel model:\n{model}')
 +        return model
 +
 +    return tutel_model
 +
 diff --git a/pretrain_gpt.py b/pretrain_gpt.py
-index 949f1571c..8971d9848 100644
+index 949f1571..8971d984 100644
 --- a/pretrain_gpt.py
 +++ b/pretrain_gpt.py
 @@ -90,6 +90,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
@@ -164,4 +162,5 @@ index 949f1571c..8971d9848 100644
  
 +    print_rank_0(f"GPT model:\n{model}")
      return model
+ 
  
