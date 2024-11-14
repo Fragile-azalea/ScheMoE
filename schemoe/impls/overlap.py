@@ -71,7 +71,7 @@ def a2a_ffn_overlap_forward(
     for i in range(a2a_ffn_overlap_degree):
         input_split[i] = input_split[i].contiguous()
         input_split[i] = Compress.apply(input_split[i], name)
-    for i in range(a2a_ffn_overlap_degree):
+        # for i in range(a2a_ffn_overlap_degree):
         input_split[i] = Comm.apply(input_split[i])
 
     for i in range(a2a_ffn_overlap_degree):
@@ -80,7 +80,7 @@ def a2a_ffn_overlap_forward(
             expert_fn(C.pre_expert_permute(input_split[i], group=group)), group=group
         )
         input_split[i] = Compress.apply(input_split[i], name)
-    for i in range(a2a_ffn_overlap_degree):
+        # for i in range(a2a_ffn_overlap_degree):
         input_split[i] = Comm.apply(input_split[i])
     for i in range(a2a_ffn_overlap_degree):
         input_split[i] = Decompress.apply(input_split[i], name)
