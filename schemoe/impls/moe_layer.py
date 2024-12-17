@@ -58,6 +58,8 @@ class MOELayer(torch.nn.Module):
         parallel_type='auto',
         use_2dh=False,
         index=0,
+        compress_name='no',
+        comm_name='naive',
         **kwargs
     ):
         super().__init__()
@@ -110,6 +112,8 @@ class MOELayer(torch.nn.Module):
 
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
         self.use_2dh = use_2dh
+        self.compress_name = compress_name
+        self.comm_name = comm_name
 
         if seeds is not None and seeds[1] is not None:
             torch.manual_seed(seeds[1])
@@ -134,6 +138,7 @@ class MOELayer(torch.nn.Module):
             self.experts = fused_experts.ExpertModule(**experts)
 
         self.experts.update(self)
+
 
         if scan_expert_func is not None:
             for n, p in self.experts.named_parameters():
@@ -288,7 +293,8 @@ class MOELayer(torch.nn.Module):
         def expert_fn(expert_input):
             return self.expert_local(expert_input, original_shape[-reserve_dims:])
         y = a2a_ffn_overlap_forward(y, expert_fn=expert_fn, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree,
-                                    use_2dh=self.use_2dh, group=self.group, is_compress=is_compress)
+                                    use_2dh=self.use_2dh, group=self.group, compress_name=self.compress_name,
+                                    comm_name=self.comm_name)
 
         if self.num_global_experts < self.world_size:
             if self.use_model_parallel:

@@ -19,7 +19,7 @@
 #include "comm/pipe.h"
 #include "compressor/abstract.h"
 #include "compressor/int8.h"
-#include "compressor/lz.h"
+// #include "compressor/lz.h"
 #include "compressor/no.h"
 #include "compressor/zfpc.h"
 #include "dd_comm.h"
@@ -192,9 +192,9 @@ get_compressor(const std::string            &name,
     if (name == "zfp") {
         return new ZfpCompressor(comm_ptr);
     }
-    if (name == "lz") {
-        return new LzCompressor(comm_ptr);
-    }
+    // if (name == "lz") {
+    //     return new LzCompressor(comm_ptr);
+    // }
     return new NoCompressor(comm_ptr);
 }
 

@@ -1,72 +1,86 @@
-diff --git a/.gitignore b/.gitignore
-index 900ab517..387aace2 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -7,4 +7,5 @@ build
- slurm*
- logs
- .vscode
--local/
-\ No newline at end of file
-+local/
-+prof_out/
-diff --git a/megatron/legacy/model/transformer.py b/megatron/legacy/model/transformer.py
-index db46a720..35d40180 100644
---- a/megatron/legacy/model/transformer.py
-+++ b/megatron/legacy/model/transformer.py
-@@ -1238,7 +1238,10 @@ class ParallelTransformerLayer(MegatronModule):
-                             self.layer_type.name)
+diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
+index eeeb1e3d..0c754477 100644
+--- a/megatron/core/transformer/transformer_layer.py
++++ b/megatron/core/transformer/transformer_layer.py
+@@ -324,7 +324,12 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+         pre_mlp_layernorm_output = self.pre_mlp_layernorm(hidden_states)
  
          # MLP.
--        mlp_output, mlp_bias = self.mlp(norm_output)
-+        if args.schemoe or args.tutel:
-+            mlp_output, mlp_bias = self.mlp(norm_output), None
+-        mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
++        from megatron.training import get_args
++        args = get_args()
++        if args.schemoe:
++            mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output), None
 +        else:
-+            mlp_output, mlp_bias = self.mlp(norm_output)
++            mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
  
-         # Second residual connection.
-         if self.apply_residual_connection_post_norm:
+         # TODO: could we move `bias_dropout_add_exec_handler` itself
+         # inside the module provided in the `bias_dropout_add_spec` module?
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 89ed8c19..c47a8184 100644
+index 0217d71e..7abb9d0f 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1194,6 +1194,10 @@ def _add_training_args(parser):
-     group.add_argument('--disable-tp-comm-split-rs', action='store_false',
+@@ -1277,6 +1277,18 @@ def _add_training_args(parser):
                         help='Disables the Reduce-Scatter overlap with fprop GEMM.',
                         dest='tp_comm_split_rs')
-+    group.add_argument('--schemoe', action='store_true',
-+                       help='Use ScheMoE.')
-+    group.add_argument('--tutel', action='store_true',
-+                       help='Use Tutel.')
  
++    # add arguments
++    group.add_argument('--schemoe', action='store_true',
++                       help='Use ScheMoE')
++    group.add_argument('--schemoe-overlap-degree', type=int, default=1,
++                       help='ScheMoE a2a overlap degree')
++    group.add_argument('--schemoe-compress-name', type=str, default='no',
++                       choices=['no', 'zfp', 'int8'],
++                       help='ScheMoE compression name')
++    group.add_argument('--schemoe-comm-name', type=str, default='naive',
++                       choices=['naive', 'pipe', 'dd', 'hetu'],
++                       help='ScheMoE communication name')
++
      return parser
+ 
  
 diff --git a/megatron/training/schemoe_moe_decorator.py b/megatron/training/schemoe_moe_decorator.py
 new file mode 100644
-index 00000000..5aaf043a
+index 00000000..d7bfb5b9
 --- /dev/null
 +++ b/megatron/training/schemoe_moe_decorator.py
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,55 @@
 +from megatron.training import get_args
 +import torch.nn.functional as F
 +from schemoe.moe import moe_layer
++import torch.distributed as dist
 +from .utils import print_rank_0
 +
 +def schmoe_moe(args, idx):
 +    hidden_size = args.hidden_size
-+    ffn_hidden_size = hidden_size * 4
++    ffn_hidden_size = args.ffn_hidden_size
++    world_size = dist.get_world_size()
++    num_experts = args.num_experts
++    if args.moe_expert_capacity_factor is not None and args.moe_expert_capacity_factor > 0:
++        capacity_factor = args.moe_expert_capacity_factor
++    else:
++        capacity_factor = 0.0
++    print_rank_0(f"ScheMoE capacity factor: {capacity_factor}")
++    expert_per_node = num_experts // world_size
++    top_k = args.moe_router_topk
 +    activation = F.gelu
++    compress_name = args.schemoe_compress_name
++    comm_name = args.schemoe_comm_name
++    overlap_degree = args.schemoe_overlap_degree
 +    moe_ffn = moe_layer(
 +        gate_type={
-+            'type' : 'top', 'k' : 2, 'capacity_factor': 0.0,
++            'type' : 'top', 'k' : top_k, 'capacity_factor': capacity_factor,
 +            'fp32_gate': True, 'gate_noise': 1.0
 +        },
 +        model_dim=hidden_size,
 +        experts={
-+            'count_per_node': 2,'type': 'ffn',
++            'count_per_node': expert_per_node,'type': 'ffn', 
 +            'hidden_size_per_expert': ffn_hidden_size,
 +            'activation_fn' : lambda x: activation(x)
 +        },
++        a2a_ffn_overlap_degree = overlap_degree,
++        compress_name = compress_name,
++        comm_name = comm_name,
 +        scan_expert_func = lambda name, param: setattr(param, 'allreduce', False),
 +    )
 +    return moe_ffn
@@ -76,22 +90,23 @@ index 00000000..5aaf043a
 +    args = get_args()
 +    def schemoe_model(pre_process=True, post_process=True):
 +        model = model_provider()
-+
-+        for idx, l in enumerate(model.language_model.encoder.layers):
++       
++        # for idx, l in enumerate(model.language_model.encoder.layers):
++        for idx, l in enumerate(model.decoder.layers):
 +            l.mlp = schmoe_moe(args, idx)
-+
++        
 +        print_rank_0(f'ScheMoE model:\n{model}')
 +        return model
 +
 +    return schemoe_model
 +
 diff --git a/megatron/training/training.py b/megatron/training/training.py
-index bc156e4c..720cc7a8 100644
+index 5556bb26..9df4c9a5 100644
 --- a/megatron/training/training.py
 +++ b/megatron/training/training.py
-@@ -228,6 +228,18 @@ def pretrain(train_valid_test_dataset_provider,
-     # Track E2E metrics on pretrain start
-     one_logger_utils.on_pretrain_start()
+@@ -269,6 +269,12 @@ def pretrain(
+     args = get_args()
+     timers = get_timers()
  
 +    # Use ScheMoE
 +    if args.schemoe:
@@ -99,68 +114,6 @@ index bc156e4c..720cc7a8 100644
 +        print_rank_0(f"Use ScheMoE Model")
 +        model_provider = schemoe_model_provider(model_provider)
 +
-+    # Use Tutel
-+    if args.tutel:
-+        from .tutel_moe_decorator import tutel_model_provider
-+        print_rank_0(f"Use Tutel Model")
-+        model_provider = tutel_model_provider(model_provider)
-+
-     # Model, optimizer, and learning rate.
-     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
-     app_metrics['app_build_optimizer_start_time'] = one_logger_utils.get_timestamp_in_ms()
-diff --git a/megatron/training/tutel_moe_decorator.py b/megatron/training/tutel_moe_decorator.py
-new file mode 100644
-index 00000000..d4108ad6
---- /dev/null
-+++ b/megatron/training/tutel_moe_decorator.py
-@@ -0,0 +1,38 @@
-+from megatron.training import get_args
-+import torch.nn.functional as F
-+from tutel.moe import moe_layer
-+from .utils import print_rank_0
-+
-+def tutel_moe(args, idx):
-+    hidden_size = args.hidden_size
-+    ffn_hidden_size = hidden_size * 4
-+    activation = F.gelu
-+    moe_ffn = moe_layer(
-+        gate_type={
-+            'type' : 'top', 'k' : 2, 'capacity_factor': 0.0,
-+            'fp32_gate': True, 'gate_noise': 1.0
-+        },
-+        model_dim=hidden_size,
-+        experts={
-+            'count_per_node': 2,'type': 'ffn',
-+            'hidden_size_per_expert': ffn_hidden_size,
-+            'activation_fn' : lambda x: activation(x)
-+        },
-+        scan_expert_func = lambda name, param: setattr(param, 'allreduce', False),
-+    )
-+    return moe_ffn
-+
-+
-+def tutel_model_provider(model_provider):
-+    args = get_args()
-+    def tutel_model(pre_process=True, post_process=True):
-+        model = model_provider()
-+
-+        for idx, l in enumerate(model.language_model.encoder.layers):
-+            l.mlp = tutel_moe(args, idx)
-+
-+        print_rank_0(f'Tutel model:\n{model}')
-+        return model
-+
-+    return tutel_model
-+
-diff --git a/pretrain_gpt.py b/pretrain_gpt.py
-index 949f1571..8971d984 100644
---- a/pretrain_gpt.py
-+++ b/pretrain_gpt.py
-@@ -90,6 +90,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
-             rotary_base=args.rotary_base
-         )
- 
-+    print_rank_0(f"GPT model:\n{model}")
-     return model
- 
+     # Track E2E metrics on pretrain start
+     one_logger_utils.on_pretrain_start()
  

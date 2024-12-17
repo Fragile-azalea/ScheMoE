@@ -4,9 +4,9 @@
 import os
 import torch
 import logging
-from ..impls.jit_compiler import tutel_custom_kernel
+from ..impls.jit_compiler import schemoe_custom_kernel
 
-torch.ops.load_library(tutel_custom_kernel.__file__)
+torch.ops.load_library(schemoe_custom_kernel.__file__)
 
 use_fast_cumsum = (int(os.environ.get('FAST_CUMSUM', '1')) == 1)
 
